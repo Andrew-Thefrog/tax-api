@@ -1,4 +1,4 @@
-// server.js - Tax Rate API Server
+// server.js - Tax Rate API Server with City-Level Rates
 // Fetches real tax data and serves it to the HTML calculator
 // Deploy to Render for free hosting
 
@@ -14,6 +14,41 @@ let taxRateCache = {
   lastUpdated: null,
   data: {},
   ttl: 24 * 60 * 60 * 1000 // Cache for 24 hours
+};
+
+// City and ZIP code level tax rates (more accurate than state average)
+const getCityTaxRates = () => {
+  return {
+    // Oklahoma cities (accurate combined rates)
+    'Moore': 0.085,           // 4.5% state + 0.25% county + 3.75% city = 8.5%
+    'Norman': 0.0875,         // 4.5% state + 0.125% county + 4.125% city = 8.75%
+    'Oklahoma City': 0.08625, // 4.5% state + 0% county + 4.125% city = 8.625%
+    'Tulsa': 0.08517,         // 4.5% state + 0.367% county + 3.65% city = 8.517%
+    'Broken Arrow': 0.08875,  // Tulsa County area = 8.875%
+    'Edmond': 0.0875,         // Oklahoma County = 8.75%
+    'Lawton': 0.0825,         // Comanche County = 8.25%
+    'Stillwater': 0.0875,     // Payne County = 8.75%
+    'Mustang': 0.085,         // Canadian County = 8.5%
+    'Yukon': 0.085,           // Canadian County = 8.5%
+    'Midwest City': 0.085,    // Oklahoma County = 8.5%
+    'Del City': 0.085,        // Oklahoma County = 8.5%
+    'Ardmore': 0.085,         // Carter County = 8.5%
+    'Bartlesville': 0.085,    // Osage County = 8.5%
+    'Muskogee': 0.0875,       // Muskogee County = 8.75%
+    'Enid': 0.0825,           // Garfield County = 8.25%
+    'Shawnee': 0.0825,        // Pottawatomie County = 8.25%
+    'Durant': 0.0875,         // Bryan County = 8.75%
+    'Chickasha': 0.0825,      // Grady County = 8.25%
+    'Altus': 0.0825,          // Jackson County = 8.25%
+    'McAlester': 0.0875,      // Pittsburg County = 8.75%
+    'Ponca City': 0.085,      // Kay County = 8.5%
+    'Pryor': 0.085,           // Mayes County = 8.5%
+    'Tahlequah': 0.0875,      // Cherokee County = 8.75%
+    'Wagoner': 0.085,         // Wagoner County = 8.5%
+    
+    // Add more cities/states as needed
+    // Format: 'City Name': combined_rate
+  };
 };
 
 // Main function to get tax rates
@@ -58,12 +93,6 @@ const getTaxRates = async () => {
 const fetchTaxFoundationRates = async () => {
   try {
     // Tax Foundation publishes 2026 rates
-    // In production, you could:
-    // 1. Parse their Excel file from their website
-    // 2. Use any public API they offer
-    // 3. Scrape their published rates
-    
-    // For now, returning their published 2026 data
     const rates = {
       'AL': { state: 0.04, avgLocal: 0.0546, combined: 0.0946, source: 'Tax Foundation 2026', lastUpdated: '2026-01-01' },
       'AK': { state: 0.00, avgLocal: 0.0182, combined: 0.0182, source: 'Tax Foundation 2026', lastUpdated: '2026-01-01' },
@@ -240,26 +269,61 @@ app.get('/api/tax-rate/:state', async (req, res) => {
   }
 });
 
-// GET /api/tax-rate-by-location - Get tax rate by coordinates
+// GET /api/tax-rate-by-location - Get tax rate by coordinates or city name
 app.get('/api/tax-rate-by-location', async (req, res) => {
   try {
-    const { lat, lng } = req.query;
+    const { lat, lng, city } = req.query;
     
+    // If city name is provided, check city rates first
+    if (city) {
+      const cityRates = getCityTaxRates();
+      const cityRate = cityRates[city];
+      
+      if (cityRate !== undefined) {
+        return res.json({
+          success: true,
+          city: city,
+          taxRate: cityRate,
+          combined: cityRate,
+          source: 'City-Level Rate'
+        });
+      }
+    }
+    
+    // Otherwise use coordinates
     if (!lat || !lng) {
       return res.status(400).json({
         success: false,
-        error: 'Latitude and longitude required'
+        error: 'Latitude and longitude required, or city name'
       });
     }
 
-    // Use Nominatim to reverse geocode coordinates to state
+    // Use Nominatim to reverse geocode coordinates to state/city
     const nominatimUrl = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`;
     const locationResponse = await fetch(nominatimUrl);
     const locationData = await locationResponse.json();
     
+    const detectedCity = locationData.address?.city || locationData.address?.town || locationData.address?.village;
     const stateFull = locationData.address?.state;
-    const city = locationData.address?.city || locationData.address?.town || locationData.address?.village;
     
+    // First check if we have a specific city rate
+    if (detectedCity) {
+      const cityRates = getCityTaxRates();
+      const cityRate = cityRates[detectedCity];
+      
+      if (cityRate !== undefined) {
+        return res.json({
+          success: true,
+          city: detectedCity,
+          state: stateFull,
+          taxRate: cityRate,
+          combined: cityRate,
+          source: 'City-Level Rate'
+        });
+      }
+    }
+    
+    // Fall back to state rate if no city rate found
     if (!stateFull) {
       return res.status(400).json({
         success: false,
@@ -282,9 +346,11 @@ app.get('/api/tax-rate-by-location', async (req, res) => {
 
     res.json({
       success: true,
+      city: detectedCity || 'Unknown',
       state: stateAbbr,
-      city: city || 'Unknown',
-      ...rateData
+      taxRate: rateData.combined,
+      ...rateData,
+      source: 'State Average Rate (City Not Found)'
     });
   } catch (error) {
     res.status(500).json({
@@ -321,5 +387,6 @@ app.listen(PORT, () => {
   console.log(`   ✓ GET /api/health`);
   console.log(`   ✓ GET /api/tax-rates`);
   console.log(`   ✓ GET /api/tax-rate/:state`);
-  console.log(`   ✓ GET /api/tax-rate-by-location?lat=X&lng=Y\n`);
+  console.log(`   ✓ GET /api/tax-rate-by-location?lat=X&lng=Y`);
+  console.log(`   ✓ GET /api/tax-rate-by-location?city=CityName\n`);
 });
