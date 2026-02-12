@@ -13,7 +13,7 @@ app.use(cors());
 let taxRateCache = {
   lastUpdated: null,
   data: {},
-  ttl: 24 * 60 * 60 * 1000 // Cache for 24 hours
+  ttl: 5 * 60 * 1000 // Cache for 5 minutes
 };
 
 // City and ZIP code level tax rates (more accurate than state average)
